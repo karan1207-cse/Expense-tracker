@@ -1,0 +1,22 @@
+.back-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  font-weight: 500;
+  padding: 0.5rem 0.75rem 0.5rem 0;
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+  margin-bottom: 1.5rem;
+}
+
+.back-button:hover {
+  color: var(--text-primary);
+  transform: translateX(-4px);
+}
+
+.back-button svg {
+  transition: transform var(--transition-fast);
+}
