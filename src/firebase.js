@@ -6,12 +6,12 @@ import { getAuth } from "firebase/auth";
 
 // Your Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyDbaV7FedWND7EO-udMOKUf6UQ7DdMdrJ0",
-  authDomain: "expense-tracker-feb75.firebaseapp.com",
-  projectId: "expense-tracker-feb75",
-  storageBucket: "expense-tracker-feb75.appspot.com",
-  messagingSenderId: "309069875492",
-  appId: "1:309069875492:web:147c55de09e64cbb8acbb1",
+  apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
+  authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.REACT_APP_FIREBASE_APP_ID,
 };
 
 // Initialize Firebase
