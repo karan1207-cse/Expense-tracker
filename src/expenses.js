@@ -172,7 +172,7 @@ function Expenses() {
                 return (
                   <div 
                     key={expense.id} 
-                    className={`expense-card ${isExpanded ? 'expanded' : ''} ${isEditing ? 'editing' : ''}`}
+                    className={`expense-card ${isExpanded ? 'expanded' : ''} ${isEditing ? 'editing' : ''} ${expense.isAnomaly ? 'highlight-anomaly' : ''}`}
                     onClick={() => toggleExpand(expense.id)}
                   >
                     <div className="expense-row-main">
@@ -181,7 +181,10 @@ function Expenses() {
                       </div>
                       
                       <div className="col-info">
-                        <span className="expense-title">{expense.title}</span>
+                        <span className="expense-title">
+                          {expense.title}
+                          {expense.isAnomaly && <span className="warning-indicator" title="AI detected this as unusually high spending">⚠️</span>}
+                        </span>
                         <span className={`category-badge ${getCategoryColor(expense.category)}`}>
                           {expense.category}
                         </span>

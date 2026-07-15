@@ -312,3 +312,20 @@
     flex-direction: column;
   }
 }
+
+/* Anomaly highlighting */
+.expense-card.highlight-anomaly {
+  background: rgba(239, 68, 68, 0.03);
+  border-left: 4px solid rgba(239, 68, 68, 0.6);
+}
+
+.expense-card.highlight-anomaly:hover {
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.warning-indicator {
+  margin-left: 8px;
+  font-size: 13px;
+  cursor: help;
+}
+
