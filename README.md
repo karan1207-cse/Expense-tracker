@@ -1,4 +1,5 @@
 # AI-Powered Expense Tracker & Personal Finance Assistant
+https://expense-tracker-feb75.web.app/
 
 An upgraded, sleek, modern expense-tracking web application built with **React** and **Firebase**, integrated with a secure **Node.js Express** backend and a **Python FastAPI** Machine Learning microservice.
 
@@ -92,5 +93,4 @@ my-new-app/
 
 ---
 
-## 📄 License
-MIT © Karan
+
