@@ -13,6 +13,17 @@ import {
 import { db } from "./firebase";
 import { useAuth } from "./AuthContext";
 
+const formatDateLocal = (dateStr) => {
+  if (!dateStr) return "";
+  if (typeof dateStr === "string" && dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    const [year, month, day] = dateStr.split("-").map(Number);
+    const dateObj = new Date(year, month - 1, day);
+    return dateObj.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+  }
+  const dateObj = new Date(dateStr);
+  return isNaN(dateObj.getTime()) ? dateStr : dateObj.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+};
+
 function Expenses() {
   const [expenses, setExpenses] = useState([]);
   const [editingId, setEditingId] = useState(null);
@@ -24,6 +35,9 @@ function Expenses() {
   const [editData, setEditData] = useState({
     title: "",
     amount: "",
+    category: "Food",
+    paymentType: "UPI",
+    date: "",
     notes: "",
   });
 
@@ -37,8 +51,17 @@ function Expenses() {
           id: docItem.id,
           ...docItem.data(),
         }));
-        // Sort by date descending
-        data.sort((a, b) => new Date(b.date) - new Date(a.date));
+        // Sort by date descending (parse locally to avoid timezone offset)
+        data.sort((a, b) => {
+          const parseLocal = (d) => {
+            if (typeof d === 'string' && d.match(/^\d{4}-\d{2}-\d{2}$/)) {
+              const [y, m, day] = d.split('-').map(Number);
+              return new Date(y, m - 1, day);
+            }
+            return new Date(d || 0);
+          };
+          return parseLocal(b.date) - parseLocal(a.date);
+        });
         setExpenses(data);
       } catch (error) {
         console.error("Error fetching expenses:", error);
@@ -57,30 +80,69 @@ function Expenses() {
     );
     if (!confirmDelete) return;
 
-    await deleteDoc(doc(db, "expenses", id));
-    setExpenses((prev) => prev.filter((expense) => expense.id !== id));
+    try {
+      await deleteDoc(doc(db, "expenses", id));
+      setExpenses((prev) => prev.filter((expense) => expense.id !== id));
+      if (expandedId === id) setExpandedId(null);
+      if (editingId === id) setEditingId(null);
+    } catch (err) {
+      console.error("Error deleting expense:", err);
+      alert("Failed to delete expense. " + (err.message || ""));
+    }
   };
 
   const handleEdit = (expense, e) => {
     e.stopPropagation();
     setEditingId(expense.id);
-    setEditData({ title: expense.title, amount: expense.amount, notes: expense.notes || "" });
+    setEditData({
+      title: expense.title || "",
+      amount: expense.amount || "",
+      category: expense.category || "Food",
+      paymentType: expense.paymentType || "UPI",
+      date: expense.date || "",
+      notes: expense.notes || "",
+    });
   };
 
   const handleSave = async (id, e) => {
     e.stopPropagation();
-    await updateDoc(doc(db, "expenses", id), {
-      title: editData.title,
-      amount: Number(editData.amount),
-      notes: editData.notes,
-    });
+    const numAmount = Number(editData.amount);
 
-    setExpenses((prev) =>
-      prev.map((expense) =>
-        expense.id === id ? { ...expense, ...editData } : expense
-      )
-    );
-    setEditingId(null);
+    if (!editData.title.trim()) {
+      alert("Please enter a title for the expense.");
+      return;
+    }
+    if (isNaN(numAmount) || numAmount <= 0) {
+      alert("Please enter a valid positive amount.");
+      return;
+    }
+    if (!editData.date) {
+      alert("Please select a valid date.");
+      return;
+    }
+
+    try {
+      const updatedPayload = {
+        title: editData.title.trim(),
+        amount: numAmount,
+        category: editData.category,
+        paymentType: editData.paymentType,
+        date: editData.date,
+        notes: editData.notes || "",
+      };
+
+      await updateDoc(doc(db, "expenses", id), updatedPayload);
+
+      setExpenses((prev) =>
+        prev.map((expense) =>
+          expense.id === id ? { ...expense, ...updatedPayload } : expense
+        )
+      );
+      setEditingId(null);
+    } catch (err) {
+      console.error("Error updating expense:", err);
+      alert("Failed to update expense: " + (err.message || ""));
+    }
   };
 
   const handleCancelEdit = (e) => {
@@ -99,7 +161,7 @@ function Expenses() {
       : expenses.filter((expense) => expense.category === selectedCategory);
 
   const formatAmount = (amount) => {
-    return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(amount);
+    return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(Number(amount) || 0);
   };
 
   const getCategoryColor = (category) => {
@@ -177,7 +239,7 @@ function Expenses() {
                   >
                     <div className="expense-row-main">
                       <div className="col-date">
-                        <span className="date-badge">{new Date(expense.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</span>
+                        <span className="date-badge">{formatDateLocal(expense.date)}</span>
                       </div>
                       
                       <div className="col-info">
@@ -206,27 +268,61 @@ function Expenses() {
                       <div className="expense-details-panel" onClick={(e) => e.stopPropagation()}>
                         {isEditing ? (
                           <div className="edit-form">
-                            <input
-                              className="edit-input"
-                              value={editData.title}
-                              onChange={(e) => setEditData({ ...editData, title: e.target.value })}
-                              placeholder="Title"
-                            />
-                            <input
-                              type="number"
-                              className="edit-input"
-                              value={editData.amount}
-                              onChange={(e) => setEditData({ ...editData, amount: e.target.value })}
-                              placeholder="Amount"
-                            />
+                            <div className="edit-row">
+                              <input
+                                className="edit-input"
+                                value={editData.title}
+                                onChange={(e) => setEditData({ ...editData, title: e.target.value })}
+                                placeholder="Title"
+                              />
+                              <input
+                                type="number"
+                                className="edit-input"
+                                value={editData.amount}
+                                onChange={(e) => setEditData({ ...editData, amount: e.target.value })}
+                                placeholder="Amount (₹)"
+                                min="0.01"
+                                step="any"
+                              />
+                            </div>
+                            <div className="edit-row" style={{ marginTop: '8px' }}>
+                              <select
+                                className="edit-input"
+                                value={editData.category}
+                                onChange={(e) => setEditData({ ...editData, category: e.target.value })}
+                              >
+                                <option value="Food">Food</option>
+                                <option value="Transport">Transport</option>
+                                <option value="Bills">Bills</option>
+                                <option value="Entertainment">Entertainment</option>
+                                <option value="Travel">Travel</option>
+                                <option value="Other">Other</option>
+                              </select>
+                              <select
+                                className="edit-input"
+                                value={editData.paymentType}
+                                onChange={(e) => setEditData({ ...editData, paymentType: e.target.value })}
+                              >
+                                <option value="Cash">Cash</option>
+                                <option value="UPI">UPI</option>
+                                <option value="Card">Card</option>
+                              </select>
+                              <input
+                                type="date"
+                                className="edit-input"
+                                value={editData.date}
+                                onChange={(e) => setEditData({ ...editData, date: e.target.value })}
+                              />
+                            </div>
                             <textarea
                               className="edit-input"
                               value={editData.notes}
                               onChange={(e) => setEditData({ ...editData, notes: e.target.value })}
                               placeholder="Notes"
                               rows="2"
+                              style={{ marginTop: '8px', width: '100%' }}
                             />
-                            <div className="action-buttons">
+                            <div className="action-buttons" style={{ marginTop: '10px' }}>
                               <button className="btn-primary" onClick={(e) => handleSave(expense.id, e)}>Save Changes</button>
                               <button className="btn-secondary" onClick={handleCancelEdit}>Cancel</button>
                             </div>
@@ -263,3 +359,4 @@ function Expenses() {
 }
 
 export default Expenses;
+

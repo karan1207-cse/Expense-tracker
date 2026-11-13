@@ -11,6 +11,26 @@ const getGenAIClient = () => {
   return new GoogleGenAI({ apiKey });
 };
 
+// Candidate models with automated fallback to avoid 404 deprecations or temporary 503 high demand spikes
+const CANDIDATE_MODELS = ['gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.1-flash-lite'];
+
+const generateContentWithFallback = async (ai, params) => {
+  let lastError = null;
+  for (const model of CANDIDATE_MODELS) {
+    try {
+      const response = await ai.models.generateContent({
+        ...params,
+        model
+      });
+      return response;
+    } catch (err) {
+      console.warn(`Model ${model} failed (${err.message}). Trying next candidate model...`);
+      lastError = err;
+    }
+  }
+  throw lastError;
+};
+
 // 1. Natural Language Expense Parser
 exports.parseExpense = async (req, res) => {
   const { text, currentDate } = req.body;
@@ -35,8 +55,7 @@ Extract the following fields and return them strictly in JSON format:
 Response format MUST be a single JSON object. Do not wrap in markdown or backticks. Example output:
 {"title": "Dominos", "amount": 450, "category": "Food", "date": "2026-07-14", "notes": ""}`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
+    const response = await generateContentWithFallback(ai, {
       contents: prompt,
       config: {
         responseMimeType: 'application/json'
@@ -89,10 +108,7 @@ Keep your responses concise, clear, and formatted nicely in markdown. Do not hal
       });
     }
     
-    // Add system instruction as part of context or system prompt
-    // In @google/genai, systemInstruction is specified in config
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
+    const response = await generateContentWithFallback(ai, {
       contents: [...contents, { role: 'user', parts: [{ text: message }] }],
       config: {
         systemInstruction: systemPrompt
@@ -136,8 +152,7 @@ Generate a concise monthly report. Include:
 
 Format the output strictly in clean markdown. Keep it visual and engaging using bullet points, bold text, and a professional tone.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
+    const response = await generateContentWithFallback(ai, {
       contents: prompt
     });
 
@@ -183,8 +198,7 @@ Output your response in a JSON list format:
 
 Provide ONLY the raw JSON list. Do not include markdown wraps.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
+    const response = await generateContentWithFallback(ai, {
       contents: prompt,
       config: {
         responseMimeType: 'application/json'
@@ -209,50 +223,111 @@ exports.scanReceipt = async (req, res) => {
   }
 
   try {
-    // 1. Run local Tesseract OCR on the buffer
-    const { data: { text } } = await Tesseract.recognize(
-      req.file.buffer,
-      'eng',
-      { logger: m => console.log('Tesseract OCR status:', m.status, `${(m.progress * 100).toFixed(0)}%`) }
-    );
-
-    console.log('Extracted OCR Text:', text);
-
-    if (!text || text.trim().length === 0) {
-      return res.status(422).json({ error: 'OCR could not read any text from this image. Please upload a clearer receipt.' });
-    }
-
-    // 2. Send OCR text to Gemini to parse details
     const ai = getGenAIClient();
     const today = new Date().toISOString().split('T')[0];
+    const mimeType = req.file.mimetype || 'image/jpeg';
+    const base64Image = req.file.buffer.toString('base64');
 
-    const prompt = `You are a financial receipt parser. Below is raw text extracted from a receipt image using OCR.
-Clean up the noise and extract the transaction details.
+    let parsedData = null;
+
+    // Strategy 1: Direct Multimodal Gemini Vision (extremely accurate, preserves layout & totals)
+    try {
+      const visionPrompt = `You are an expert financial receipt parser and OCR engine.
+Analyze this receipt image and extract the transaction details.
+
+Extract these fields and return strictly in JSON format:
+- "title": store or merchant name (e.g., "McDonald's", "D-Mart", "Zara", "Walmart", "Starbucks")
+- "amount": final total purchase cost / grand total as a clean number (e.g., 450.50, 24.99). Never include currency symbols.
+- "category": classify into exactly one of: "Food", "Transport", "Bills", "Entertainment", "Travel", "Other"
+- "date": the transaction date formatted as "YYYY-MM-DD". If unclear or not found, use today's date "${today}".
+- "notes": brief notes (e.g. items bought, or empty string).
+
+Return ONLY a single valid JSON object. Example:
+{"title": "Dmart", "amount": 1200.00, "category": "Food", "date": "${today}", "notes": "Milk, bread"}`;
+
+      const response = await generateContentWithFallback(ai, {
+        contents: [
+          {
+            inlineData: {
+              mimeType,
+              data: base64Image
+            }
+          },
+          { text: visionPrompt }
+        ],
+        config: {
+          responseMimeType: 'application/json'
+        }
+      });
+
+      const jsonText = response.text?.trim() || '{}';
+      parsedData = JSON.parse(jsonText);
+    } catch (visionErr) {
+      console.warn('Direct Gemini Vision attempt had an issue, trying Tesseract OCR fallback:', visionErr.message);
+    }
+
+    // Strategy 2: If vision didn't extract title or amount, try Tesseract OCR on the buffer
+    if (!parsedData || !parsedData.title || !parsedData.amount) {
+      try {
+        const { data: { text } } = await Tesseract.recognize(
+          req.file.buffer,
+          'eng',
+          { logger: m => console.log('Tesseract OCR status:', m.status, `${(m.progress * 100).toFixed(0)}%`) }
+        );
+
+        console.log('Extracted OCR Text:', text);
+
+        if (text && text.trim().length > 0) {
+          const textPrompt = `You are a financial receipt parser. Below is raw text extracted from a receipt image using OCR.
+Clean up the noise and extract transaction details.
 
 Raw OCR Text:
 """
 ${text}
 """
 
-Extract these fields and return them strictly in JSON format:
-- "title": store or merchant name (e.g., "McDonald's", "D-Mart", "Zara")
-- "amount": total purchase cost as a number (e.g., 850.50). Make sure to extract the total sum correctly.
+Extract these fields and return strictly in JSON format:
+- "title": store or merchant name
+- "amount": total purchase cost as a number
 - "category": classify into: "Food", "Transport", "Bills", "Entertainment", "Travel", "Other"
-- "date": the receipt transaction date formatted as "YYYY-MM-DD". If not found or unclear, use today's date "${today}".
-- "notes": brief notes (e.g., list of items bought if visible in OCR text, or empty string).
+- "date": the receipt date formatted as "YYYY-MM-DD". If not found, use "${today}".
+- "notes": brief notes.
 
-Response format must be a single JSON object. Do not include markdown code block wraps. Example output:
-{"title": "Dmart", "amount": 1200.00, "category": "Food", "date": "2026-07-12", "notes": "Milk, bread, snacks"}`;
+Return ONLY a valid JSON object.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json'
+          const response = await generateContentWithFallback(ai, {
+            contents: textPrompt,
+            config: {
+              responseMimeType: 'application/json'
+            }
+          });
+
+          const tesseractData = JSON.parse(response.text.trim());
+          parsedData = {
+            title: parsedData?.title || tesseractData.title,
+            amount: parsedData?.amount || tesseractData.amount,
+            category: parsedData?.category || tesseractData.category,
+            date: parsedData?.date || tesseractData.date,
+            notes: parsedData?.notes || tesseractData.notes || ''
+          };
+        }
+      } catch (tessErr) {
+        console.warn('Tesseract OCR processing note:', tessErr.message);
       }
-    });
+    }
 
-    const parsedData = JSON.parse(response.text.trim());
+    if (!parsedData || (!parsedData.title && !parsedData.amount)) {
+      return res.status(422).json({ error: 'OCR could not read readable receipt details from this image. Please upload a clearer receipt.' });
+    }
+
+    // Clean up data
+    if (parsedData.amount) {
+      parsedData.amount = Number(parsedData.amount) || 0;
+    }
+    if (!parsedData.category) {
+      parsedData.category = 'Other';
+    }
+
     return res.json(parsedData);
   } catch (error) {
     console.error('Error scanning receipt:', error);
@@ -280,10 +355,12 @@ exports.predictSpending = async (req, res) => {
     console.log('Falling back to rule-based prediction calculations...');
     
     // Simple fallback prediction logic: average daily spending * days
-    const totalDays = expenses.length > 1 
-      ? Math.max(1, (new Date(expenses[0].date) - new Date(expenses[expenses.length - 1].date)) / (1000 * 60 * 60 * 24))
-      : 1;
-    const totalAmount = expenses.reduce((sum, e) => sum + e.amount, 0);
+    const sorted = [...expenses].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const firstDate = new Date(sorted[0]?.date || Date.now());
+    const lastDate = new Date(sorted[sorted.length - 1]?.date || Date.now());
+    const dayDiff = Math.abs((lastDate - firstDate) / (1000 * 60 * 60 * 24));
+    const totalDays = Math.max(1, Math.round(dayDiff) + 1);
+    const totalAmount = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
     const avgDaily = totalAmount / totalDays;
     
     return res.json({

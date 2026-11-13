@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Chart, registerables } from 'chart.js';
 import { getMLPredictions, getMonthlySummaryAI } from '../services/api';
@@ -7,7 +7,34 @@ import './Dashboard.css';
 // Register Chart.js components
 Chart.register(...registerables);
 
-export default function Dashboard({ expenses, budget, total, remaining, usedPerc }) {
+// Helper to format "YYYY-MM" to "September 2026"
+const formatMonthLabel = (yearMonthStr) => {
+  if (yearMonthStr === 'ALL') return 'All Time';
+  if (!yearMonthStr || !yearMonthStr.includes('-')) return yearMonthStr;
+  const [year, month] = yearMonthStr.split('-').map(Number);
+  const dateObj = new Date(year, month - 1, 1);
+  return dateObj.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+};
+
+// Helper for local date parsing without timezone offset
+const parseDateLocal = (dateStr) => {
+  if (!dateStr) return new Date(0);
+  if (typeof dateStr === 'string' && dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  }
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? new Date(0) : d;
+};
+
+const formatDateLocal = (dateStr) => {
+  if (!dateStr) return '';
+  const dateObj = parseDateLocal(dateStr);
+  if (dateObj.getTime() === 0) return dateStr;
+  return dateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+};
+
+export default function Dashboard({ expenses, budget }) {
   const navigate = useNavigate();
   const doughnutChartRef = useRef(null);
   const lineChartRef = useRef(null);
@@ -19,6 +46,60 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
   const [loadingPreds, setLoadingPreds] = useState(false);
   const [aiReport, setAiReport] = useState('');
   const [generatingReport, setGeneratingReport] = useState(false);
+
+  // Month selector setup
+  const now = new Date();
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const [selectedMonth, setSelectedMonth] = useState(currentMonthKey);
+
+  // Reset AI report when month changes
+  useEffect(() => {
+    setAiReport('');
+  }, [selectedMonth]);
+
+  // Extract all unique YYYY-MM from expenses, plus current month
+  const availableMonths = useMemo(() => {
+    const monthSet = new Set();
+    monthSet.add(currentMonthKey);
+    (expenses || []).forEach((e) => {
+      if (e.date && typeof e.date === 'string' && e.date.length >= 7) {
+        monthSet.add(e.date.substring(0, 7));
+      }
+    });
+    const sorted = Array.from(monthSet).sort().reverse();
+    return [...sorted, 'ALL'];
+  }, [expenses, currentMonthKey]);
+
+  // Filter expenses for selected month
+  const filteredExpenses = useMemo(() => {
+    if (!expenses) return [];
+    if (selectedMonth === 'ALL') return expenses;
+    return expenses.filter((e) => e.date && e.date.startsWith(selectedMonth));
+  }, [expenses, selectedMonth]);
+
+  // Calculate stats strictly for selected month
+  const monthlyTotal = useMemo(() => {
+    return filteredExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+  }, [filteredExpenses]);
+
+  const monthlyRemaining = useMemo(() => {
+    if (budget > 0) return budget - monthlyTotal;
+    return 0 - monthlyTotal;
+  }, [budget, monthlyTotal]);
+
+  const monthlyUsedPerc = useMemo(() => {
+    if (budget > 0) return Math.min(999, Number(((monthlyTotal / budget) * 100).toFixed(1)));
+    return 0;
+  }, [budget, monthlyTotal]);
+
+  // Format currency cleanly
+  const formatCurrency = (val) => {
+    const num = Number(val) || 0;
+    if (num < 0) {
+      return `-₹${Math.abs(num).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+    return `₹${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
 
   // Fetch predictions from Python ML microservice via backend proxy
   useEffect(() => {
@@ -41,11 +122,15 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
 
   // Handle Chart rendering
   useEffect(() => {
-    if (!expenses || expenses.length === 0) return;
+    if (!filteredExpenses || filteredExpenses.length === 0) {
+      if (doughnutChartInst.current) doughnutChartInst.current.destroy();
+      if (lineChartInst.current) lineChartInst.current.destroy();
+      return;
+    }
 
     // 1. Doughnut Chart: Category breakdown
     const categoryTotals = {};
-    expenses.forEach(e => {
+    filteredExpenses.forEach(e => {
       categoryTotals[e.category] = (categoryTotals[e.category] || 0) + Number(e.amount);
     });
 
@@ -90,18 +175,16 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
       });
     }
 
-    // 2. Line Chart: Spending trend over last 7 days/weeks
-    // Sort transactions by date ascending for line chart
-    const sorted = [...expenses].sort((a, b) => new Date(a.date) - new Date(b.date));
+    // 2. Line Chart: Spending trend
+    const sorted = [...filteredExpenses].sort((a, b) => parseDateLocal(a.date) - parseDateLocal(b.date));
     
-    // Group by date
+    // Group by date using formatDateLocal
     const dailySpend = {};
     sorted.forEach(e => {
-      const d = new Date(e.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+      const d = formatDateLocal(e.date);
       dailySpend[d] = (dailySpend[d] || 0) + Number(e.amount);
     });
 
-    // Take the last 7 unique days of transactions
     const trendLabels = Object.keys(dailySpend).slice(-7);
     const trendData = Object.values(dailySpend).slice(-7);
 
@@ -151,13 +234,13 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
       if (doughnutChartInst.current) doughnutChartInst.current.destroy();
       if (lineChartInst.current) lineChartInst.current.destroy();
     };
-  }, [expenses]);
+  }, [filteredExpenses]);
 
   const handleGenerateReport = async () => {
-    if (generatingReport || !expenses || expenses.length === 0) return;
+    if (generatingReport || !filteredExpenses || filteredExpenses.length === 0) return;
     setGeneratingReport(true);
     try {
-      const data = await getMonthlySummaryAI(expenses, budget);
+      const data = await getMonthlySummaryAI(filteredExpenses, budget);
       setAiReport(data.summary);
     } catch (error) {
       console.error('Error generating report:', error);
@@ -167,8 +250,8 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
     }
   };
 
-  // Find anomalous expenses in local list to highlight on dashboard
-  const anomalies = expenses.filter(e => e.isAnomaly);
+  // Find anomalous expenses in filtered list
+  const anomalies = filteredExpenses.filter(e => e.isAnomaly);
 
   return (
     <div className="dashboard-content fade-in">
@@ -178,6 +261,17 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
           <p>Real-time analytics and AI-powered insights for your wealth.</p>
         </div>
         <div className="header-actions">
+          <select 
+            className="month-filter-select"
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+          >
+            {availableMonths.map((m) => (
+              <option key={m} value={m}>
+                {formatMonthLabel(m)}
+              </option>
+            ))}
+          </select>
           <button className="header-btn primary" onClick={() => navigate('/add')}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             Add Expense
@@ -193,19 +287,27 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
       <div className="kpi-grid">
         <div className="kpi-card">
           <span className="kpi-label">Total Outflow</span>
-          <h3 className="kpi-value">₹{total.toFixed(2)}</h3>
-          <span className="kpi-trend negative">This month</span>
+          <h3 className="kpi-value">{formatCurrency(monthlyTotal)}</h3>
+          <span className="kpi-trend negative">{formatMonthLabel(selectedMonth)}</span>
         </div>
 
         <div className="kpi-card">
           <span className="kpi-label">Monthly Limit</span>
-          <h3 className="kpi-value">₹{budget.toFixed(2)}</h3>
+          <h3 className="kpi-value">{formatCurrency(budget)}</h3>
           {budget > 0 ? (
             <div className="kpi-progress">
               <div className="progress-bar-bg">
-                <div className="progress-bar-fill" style={{ width: `${Math.min(100, usedPerc)}%` }}></div>
+                <div 
+                  className="progress-bar-fill" 
+                  style={{ 
+                    width: `${Math.min(100, monthlyUsedPerc)}%`,
+                    backgroundColor: monthlyUsedPerc > 100 ? '#ef4444' : undefined 
+                  }}
+                ></div>
               </div>
-              <span className="kpi-subtext">{usedPerc}% Consumed</span>
+              <span className="kpi-subtext" style={{ color: monthlyUsedPerc > 100 ? '#ef4444' : undefined }}>
+                {monthlyUsedPerc}% Consumed {monthlyUsedPerc > 100 ? '(Over Budget!)' : ''}
+              </span>
             </div>
           ) : (
             <span className="kpi-subtext action-req" onClick={() => navigate('/profile')}>Set budget in Profile</span>
@@ -214,8 +316,12 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
 
         <div className="kpi-card">
           <span className="kpi-label">Available Balance</span>
-          <h3 className="kpi-value">₹{remaining}</h3>
-          <span className="kpi-trend positive">Remaining</span>
+          <h3 className="kpi-value" style={{ color: monthlyRemaining < 0 ? '#ef4444' : undefined }}>
+            {formatCurrency(monthlyRemaining)}
+          </h3>
+          <span className={`kpi-trend ${monthlyRemaining < 0 ? 'negative' : 'positive'}`}>
+            {monthlyRemaining < 0 ? 'Deficit' : 'Remaining'}
+          </span>
         </div>
       </div>
 
@@ -240,15 +346,15 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
           <div className="forecasts-grid">
             <div className="forecast-item">
               <span className="item-label">Expected Next Week</span>
-              <span className="item-value">₹{predictions.next_week_predicted}</span>
+              <span className="item-value">{formatCurrency(predictions.next_week_predicted)}</span>
             </div>
             <div className="forecast-item">
               <span className="item-label">Expected Next Month</span>
-              <span className="item-value">₹{predictions.next_month_predicted}</span>
+              <span className="item-value">{formatCurrency(predictions.next_month_predicted)}</span>
             </div>
             <div className="forecast-item">
               <span className="item-label">Expected Monthly Savings</span>
-              <span className="item-value positive">₹{predictions.expected_monthly_savings}</span>
+              <span className="item-value positive">{formatCurrency(predictions.expected_monthly_savings)}</span>
             </div>
           </div>
         ) : (
@@ -259,23 +365,23 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
       {/* Charts section */}
       <div className="charts-grid">
         <div className="chart-card">
-          <h4>Category Share</h4>
+          <h4>Category Share ({formatMonthLabel(selectedMonth)})</h4>
           <div className="canvas-wrapper">
-            {expenses.length > 0 ? (
+            {filteredExpenses.length > 0 ? (
               <canvas ref={doughnutChartRef}></canvas>
             ) : (
-              <div className="chart-placeholder">Add transactions to view category share</div>
+              <div className="chart-placeholder">No transactions found for {formatMonthLabel(selectedMonth)}</div>
             )}
           </div>
         </div>
 
         <div className="chart-card">
-          <h4>Spending Curve (Last 7 Active Days)</h4>
+          <h4>Spending Curve ({formatMonthLabel(selectedMonth)})</h4>
           <div className="canvas-wrapper">
-            {expenses.length > 0 ? (
+            {filteredExpenses.length > 0 ? (
               <canvas ref={lineChartRef}></canvas>
             ) : (
-              <div className="chart-placeholder">Add transactions to view spending trend</div>
+              <div className="chart-placeholder">No transactions found for {formatMonthLabel(selectedMonth)}</div>
             )}
           </div>
         </div>
@@ -300,9 +406,9 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
                   <div key={e.id} className="anomaly-item">
                     <div>
                       <span className="anomaly-title">{e.title}</span>
-                      <span className="anomaly-meta">{e.category} | {e.date}</span>
+                      <span className="anomaly-meta">{e.category} | {formatDateLocal(e.date)}</span>
                     </div>
-                    <span className="anomaly-amount">₹{e.amount}</span>
+                    <span className="anomaly-amount">{formatCurrency(e.amount)}</span>
                   </div>
                 ))}
               </div>
@@ -310,9 +416,9 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
           )}
 
           <div className="dashboard-list-card">
-            <h4>Recent Outflows</h4>
+            <h4>Outflows ({formatMonthLabel(selectedMonth)})</h4>
             <div className="recent-list">
-              {expenses.slice(0, 4).map(e => (
+              {filteredExpenses.slice(0, 5).map(e => (
                 <div key={e.id} className={`recent-item ${e.isAnomaly ? 'highlight-anomaly' : ''}`}>
                   <div className="recent-item-info">
                     <span className="recent-title">
@@ -322,13 +428,13 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
                     <span className="recent-category-badge">{e.category}</span>
                   </div>
                   <div className="recent-item-amount-date">
-                    <span className="recent-amount">₹{Number(e.amount).toFixed(2)}</span>
-                    <span className="recent-date">{new Date(e.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</span>
+                    <span className="recent-amount">{formatCurrency(e.amount)}</span>
+                    <span className="recent-date">{formatDateLocal(e.date)}</span>
                   </div>
                 </div>
               ))}
-              {expenses.length === 0 && (
-                <p className="no-transactions">No transactions recorded yet.</p>
+              {filteredExpenses.length === 0 && (
+                <p className="no-transactions">No transactions recorded for this period.</p>
               )}
             </div>
           </div>
@@ -351,7 +457,7 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
               <button 
                 className="generate-report-btn" 
                 onClick={handleGenerateReport}
-                disabled={generatingReport || expenses.length === 0}
+                disabled={generatingReport || filteredExpenses.length === 0}
               >
                 {generatingReport ? 'Analyzing...' : 'Generate AI Report'}
               </button>
@@ -361,7 +467,7 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
               {generatingReport ? (
                 <div className="report-loading">
                   <div className="spinner"></div>
-                  <p>Our financial AI is reading your expenses, tracking trends, and drafting suggestions. Hang tight...</p>
+                  <p>Our financial AI is reading your expenses for {formatMonthLabel(selectedMonth)}, tracking trends, and drafting suggestions. Hang tight...</p>
                 </div>
               ) : aiReport ? (
                 <div className="report-markdown-view">
@@ -401,7 +507,7 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
                   <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
                     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                   </svg>
-                  <p>Click "Generate AI Report" to get personalized savings tips, budget usage, and expense analysis dynamically built from your history.</p>
+                  <p>Click "Generate AI Report" to get personalized savings tips, budget usage, and expense analysis for {formatMonthLabel(selectedMonth)}.</p>
                 </div>
               )}
             </div>
@@ -411,3 +517,4 @@ export default function Dashboard({ expenses, budget, total, remaining, usedPerc
     </div>
   );
 }
+

@@ -41,7 +41,12 @@ export default function ReceiptScanner({ onScanned, disabled }) {
       setPreviewUrl(null);
     } catch (error) {
       console.error('Scan error:', error);
-      alert(error.response?.data?.error || 'OCR scan failed. Make sure the backend server is running and receipt text is readable.');
+      const serverMessage = error.response?.data?.error;
+      if (serverMessage) {
+        alert(serverMessage);
+      } else {
+        alert('OCR scan failed: Backend server is not reachable. Please ensure the backend server is running on port 5000 (run "npm start" inside the server directory).');
+      }
     } finally {
       setScanning(false);
     }

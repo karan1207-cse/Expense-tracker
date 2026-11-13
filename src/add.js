@@ -63,14 +63,18 @@ function Add() {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
+    const cleanTitle = expense.title.trim();
+    const numAmount = Number(expense.amount);
+
     if (
-      !expense.title ||
-      !expense.amount ||
+      !cleanTitle ||
+      isNaN(numAmount) ||
+      numAmount <= 0 ||
       !expense.category ||
       !expense.date ||
       !expense.paymentType
     ) {
-      alert("Please fill in all required fields.");
+      alert("Please fill in all required fields with valid values (Amount must be greater than 0).");
       return;
     }
 
@@ -81,10 +85,10 @@ function Add() {
     try {
       // Check for spending anomaly
       const checkRes = await checkAnomaly(history, {
-        amount: Number(expense.amount),
+        amount: numAmount,
         category: expense.category,
         date: expense.date,
-        title: expense.title
+        title: cleanTitle
       });
 
       if (checkRes.is_anomaly) {
@@ -106,19 +110,31 @@ function Add() {
     }
 
     try {
-      await addDoc(collection(db, "expenses"), {
-        title: expense.title,
-        amount: Number(expense.amount),
+      const newDocRef = await addDoc(collection(db, "expenses"), {
+        title: cleanTitle,
+        amount: numAmount,
         category: expense.category,
         date: expense.date,
         paymentType: expense.paymentType,
-        notes: expense.notes,
+        notes: (expense.notes || "").trim(),
         isAnomaly: isAnomalyDetected,
         createdAt: new Date(),
         userId: currentUser.uid,
       });
 
       alert("Expense added successfully!");
+
+      const addedItem = {
+        id: newDocRef.id,
+        title: cleanTitle,
+        amount: numAmount,
+        category: expense.category,
+        date: expense.date,
+        paymentType: expense.paymentType,
+        notes: expense.notes || "",
+        isAnomaly: isAnomalyDetected,
+        userId: currentUser.uid
+      };
 
       setExpense({
         title: "",
@@ -128,11 +144,12 @@ function Add() {
         paymentType: "",
         notes: "",
       });
+
       // Refresh local history list
-      setHistory((prev) => [...prev, { ...expense, amount: Number(expense.amount) }]);
+      setHistory((prev) => [...prev, addedItem]);
     } catch (error) {
       console.error("Error adding expense:", error);
-      alert(error.message);
+      alert("Failed to add expense: " + (error.message || ""));
     } finally {
       setIsSubmitting(false);
     }

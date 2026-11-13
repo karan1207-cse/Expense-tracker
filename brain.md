@@ -28,13 +28,17 @@ graph TD
 * **Decision**: We chose to continue using **Firebase Firestore** for core expense management and **Firebase Auth** for login/signup, rather than migrating to MySQL.
 * **Rationale**: Keeps client-side state handling simple and maintains compatibility with existing hosting setups. Data is fetched by the React client and passed to the backend server as JSON when analysis or forecasts are requested.
 
-### 2. Gemini API Model Compatibility
-* **Learned constraint**: The model `gemini-2.5-flash` is no longer available to new users, and `gemini-3.5-flash` is subject to high-demand errors (503).
-* **Working Model**: We verified that **`gemini-3.1-flash-lite`** executes successfully, is extremely fast, and operates safely within free rate limits. All controller requests use `gemini-3.1-flash-lite`.
+### 2. Gemini API Model Compatibility & Resilient Fallback
+* **Learned constraint**: The model `gemini-2.0-flash-lite` has been deprecated and returns 404. Newer models like `gemini-3.1-flash-lite` or `gemini-3.5-flash-lite` can occasionally experience temporary demand spikes (503).
+* **Solution**: The backend implements an automated model fallback cascade: `['gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.1-flash-lite']`. If one model is temporarily busy, it seamlessly switches to the next candidate model.
 
-### 3. OCR Implementation
-* **Decision**: We use **`tesseract.js`** inside the Express backend for OCR.
-* **Rationale**: It runs completely in JavaScript (using WebAssembly) on Node.js, eliminating the need to install native Tesseract binaries on Windows or host machines.
+### 3. OCR & Multimodal Receipt Parsing
+* **Decision**: We utilize direct **Gemini Multimodal Vision** with **Tesseract.js** as a fallback.
+* **Rationale**: Direct Gemini Multimodal Vision processes raw receipt images with near-perfect layout recognition, preserving totals, tax, store names, and date without noisy OCR transcription errors. If needed, Tesseract OCR provides offline/buffer fallback.
+
+### 4. Chrome Private Network Access (PNA)
+* **Learned constraint**: When visiting the hosted frontend (`https://expense-tracker-feb75.web.app`), Chrome blocks requests to `http://localhost:5000` unless the server explicitly permits Private Network Access.
+* **Solution**: Express responds to OPTIONS preflight with `Access-Control-Allow-Private-Network: true` and `Access-Control-Allow-Origin: *`.
 
 ### 4. Fail-safe ML Fallbacks
 * **Learned constraint**: If the Python service is offline, the React app's dashboard or expense creation could hang or fail.

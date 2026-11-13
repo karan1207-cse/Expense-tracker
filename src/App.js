@@ -9,7 +9,7 @@ import Profile from './Profile';
 import Dashboard from './pages/Dashboard';
 import Chatbot from './components/Chatbot';
 import { useAuth } from './AuthContext';
-import { collection, query, where, doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, doc, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
 import './App.css';
 
@@ -22,63 +22,59 @@ function App() {
   const navigate = useNavigate();
   const { currentUser, logout } = useAuth();
   const [showMenu, setShowMenu] = React.useState(false);
-  const [usedPerc, setUsedPerc] = useState(0);
-  const [remaining, setRemaining] = useState(0);
   const [budget, setBudget] = useState(0);
-  const [total, setTotal] = useState(0);
   const [expensesList, setExpensesList] = useState([]);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      setBudget(0);
+      setExpensesList([]);
+      return;
+    }
     
-    // Listener for budget (once)
-    const fetchBudget = async () => {
-      try {
-        const userSnap = await getDoc(doc(db, 'users', currentUser.uid));
-        const userData = userSnap.data() || {};
-        setBudget(Number(userData.budget) || 0);
-      } catch (err) {
-        console.error('Error fetching budget', err);
-      }
-    };
-    fetchBudget();
+    // Real-time listener for budget (updates instantly when Profile is saved)
+    const unsubBudget = onSnapshot(doc(db, 'users', currentUser.uid), (snap) => {
+      const userData = snap.data() || {};
+      setBudget(Number(userData.budget) || 0);
+    }, (err) => {
+      console.error('Error listening to budget', err);
+    });
 
     // Real‑time listener for expenses
     const q = query(collection(db, 'expenses'), where('userId', '==', currentUser.uid));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      let sum = 0;
       const list = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        const amt = Number(data.amount) || 0;
-        sum += amt;
         list.push({ id: docSnap.id, ...data });
       });
-      // Sort by date descending
-      list.sort((a, b) => new Date(b.date) - new Date(a.date));
-      setTotal(sum);
+      // Sort by date descending (timezone-safe local parse)
+      list.sort((a, b) => {
+        const parseLocal = (d) => {
+          if (typeof d === 'string' && d.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            const [y, m, day] = d.split('-').map(Number);
+            return new Date(y, m - 1, day);
+          }
+          return new Date(d || 0);
+        };
+        return parseLocal(b.date) - parseLocal(a.date);
+      });
       setExpensesList(list);
     }, (error) => {
       console.error('Error listening to expenses', error);
     });
-    return () => unsubscribe();
+    return () => {
+      unsubBudget();
+      unsubscribe();
+    };
   }, [currentUser]);
-
-  useEffect(() => {
-    if (budget > 0) {
-      const percentage = ((total / budget) * 100).toFixed(1);
-      setUsedPerc(percentage);
-      setRemaining((budget - total).toFixed(2));
-    } else {
-      setUsedPerc(0);
-      setRemaining((0 - total).toFixed(2));
-    }
-  }, [total, budget]);
 
   async function handleLogout() {
     try {
       await logout();
       setShowMenu(false);
+      setBudget(0);
+      setExpensesList([]);
       navigate("/login");
     } catch (error) {
       console.error("Failed to log out", error);
@@ -132,9 +128,6 @@ function App() {
                   <Dashboard 
                     expenses={expensesList}
                     budget={budget}
-                    total={total}
-                    remaining={remaining}
-                    usedPerc={usedPerc}
                   />
                 </main>
               </div>

@@ -75,6 +75,28 @@
   box-shadow: 0 6px 18px var(--accent-glow);
 }
 
+.month-filter-select {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 8px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  transition: all var(--transition-fast);
+}
+
+.month-filter-select:hover {
+  border-color: #6366f1;
+}
+
+.month-filter-select option {
+  background: #1e293b;
+  color: #f8fafc;
+}
+
 .header-btn.secondary {
   background: var(--bg-secondary);
   color: var(--text-primary);
